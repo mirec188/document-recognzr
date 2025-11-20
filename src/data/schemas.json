@@ -1,0 +1,219 @@
+{
+    "invoice": {
+        "type": "object",
+        "properties": {
+            "invoiceHeader": {
+                "type": "object",
+                "properties": {
+                    "invoiceNumber": {
+                        "type": "string"
+                    },
+                    "date": {
+                        "type": "string"
+                    },
+                    "dueDate": {
+                        "type": "string"
+                    },
+                    "currency": {
+                        "type": "string"
+                    },
+                    "totalAmount": {
+                        "type": "number"
+                    },
+                    "taxAmount": {
+                        "type": "number"
+                    }
+                },
+                "required": [
+                    "invoiceNumber",
+                    "date",
+                    "totalAmount"
+                ]
+            },
+            "customerData": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "address": {
+                        "type": "string"
+                    },
+                    "taxId": {
+                        "type": "string"
+                    },
+                    "email": {
+                        "type": "string"
+                    }
+                }
+            },
+            "vendorData": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "address": {
+                        "type": "string"
+                    },
+                    "taxId": {
+                        "type": "string"
+                    },
+                    "iban": {
+                        "type": "string"
+                    }
+                }
+            },
+            "invoiceRows": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "description": {
+                            "type": "string"
+                        },
+                        "quantity": {
+                            "type": "number"
+                        },
+                        "unitPrice": {
+                            "type": "number"
+                        },
+                        "total": {
+                            "type": "number"
+                        }
+                    }
+                }
+            }
+        },
+        "required": [
+            "invoiceHeader",
+            "invoiceRows"
+        ]
+    },
+    "bankStatement": {
+        "type": "object",
+        "properties": {
+            "accountInfo": {
+                "type": "object",
+                "properties": {
+                    "accountNumber": {
+                        "type": "string"
+                    },
+                    "accountHolder": {
+                        "type": "string"
+                    },
+                    "bankName": {
+                        "type": "string"
+                    },
+                    "statementDate": {
+                        "type": "string"
+                    },
+                    "openingBalance": {
+                        "type": "number"
+                    },
+                    "closingBalance": {
+                        "type": "number"
+                    }
+                },
+                "required": [
+                    "accountNumber",
+                    "statementDate"
+                ]
+            },
+            "transactions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "date": {
+                            "type": "string"
+                        },
+                        "description": {
+                            "type": "string"
+                        },
+                        "amount": {
+                            "type": "number"
+                        },
+                        "type": {
+                            "type": "string",
+                            "enum": [
+                                "credit",
+                                "debit"
+                            ]
+                        },
+                        "balanceAfter": {
+                            "type": "number"
+                        }
+                    }
+                }
+            }
+        },
+        "required": [
+            "accountInfo",
+            "transactions"
+        ]
+    },
+    "loanContract": {
+        "type": "object",
+        "properties": {
+            "contractDetails": {
+                "type": "object",
+                "properties": {
+                    "contractNumber": {
+                        "type": "string"
+                    },
+                    "agreementDate": {
+                        "type": "string"
+                    },
+                    "loanAmount": {
+                        "type": "number"
+                    },
+                    "interestRate": {
+                        "type": "number"
+                    },
+                    "termMonths": {
+                        "type": "number"
+                    },
+                    "monthlyPayment": {
+                        "type": "number"
+                    }
+                },
+                "required": [
+                    "contractNumber",
+                    "loanAmount",
+                    "interestRate"
+                ]
+            },
+            "borrower": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "address": {
+                        "type": "string"
+                    },
+                    "idNumber": {
+                        "type": "string"
+                    }
+                }
+            },
+            "lender": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "address": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "required": [
+            "contractDetails",
+            "borrower",
+            "lender"
+        ]
+    }
+}
