@@ -1,6 +1,6 @@
 # Document Recognizer
 
-A modern web application to parse Invoices, Bank Statements, and Loan Contracts using Google Gemini AI.
+A modern web application to parse Invoices, Bank Statements, and Loan Contracts using Google Gemini AI or OpenAi GPT-5
 
 ## Setup
 
