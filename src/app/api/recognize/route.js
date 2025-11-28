@@ -4,10 +4,29 @@ import { NextResponse } from "next/server";
 import PDFParser from "pdf2json";
 import fs from 'fs/promises';
 import path from 'path';
+import { ProxyAgent } from "undici";
+
+export const dynamic = 'force-dynamic';
+export const maxDuration = 300;
+export const runtime = 'nodejs';
 
 // Initialize Clients
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GENERATIVE_AI_API_KEY);
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const OPENAI_TIMEOUT = Number(process.env.OPENAI_TIMEOUT_MS) || 300000;
+const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+const dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
+const longFetch = (url, init = {}) => {
+    const signal = AbortSignal.timeout(OPENAI_TIMEOUT);
+    return fetch(url, { ...init, signal, cache: 'no-store', dispatcher });
+};
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: OPENAI_TIMEOUT, fetch: longFetch });
+
+// Azure OpenAI configuration (expects .env values)
+const AZURE_OPENAI_API_KEY = process.env.AZURE_OPENAI_API_KEY;
+const AZURE_OPENAI_RESOURCE = process.env.AZURE_OPENAI_RESOURCE_NAME; // e.g., slsp-openai-sweden
+const AZURE_OPENAI_API_VERSION = process.env.AZURE_OPENAI_API_VERSION; // e.g., 2025-01-01-preview
+const AZURE_OPENAI_DEPLOYMENT = process.env.AZURE_OPENAI_DEPLOYMENT; // e.g., datamanagement-gpt-5
+const AZURE_USE_DEPLOYMENT_URLS = process.env.AZURE_OPENAI_USE_DEPLOYMENT_URLS === 'true';
 
 const dataFilePath = path.join(process.cwd(), 'src/data/schemas.json');
 
@@ -69,7 +88,7 @@ export async function POST(req) {
 
         let jsonResponse;
 
-        if (modelProvider === "openai") {
+        if (modelProvider === "openai" || modelProvider === "azure-openai") {
             // OpenAI Implementation
             let userContent;
 
@@ -116,40 +135,106 @@ export async function POST(req) {
             console.log(JSON.stringify(userContent, null, 2));
             console.log("-----------------------------");
 
-            const response = await openai.chat.completions.create({
-                model: "gpt-5",
-                messages: [
-                    {
-                        role: "system",
-                        content: `You are an expert document parser. Extract information from this ${docType}.`
-                    },
-                    {
-                        role: "user",
-                        content: userContent,
-                    },
-                ],
-                response_format: {
-                    type: "json_schema",
-                    json_schema: {
-                        name: docType,
-                        strict: true,
-                        schema: strictSchema
+            // Choose OpenAI client and model based on provider
+            let response;
+            if (modelProvider === "azure-openai") {
+                // Construct Azure deployment-scoped endpoint and include required api-version
+                const deployment = AZURE_OPENAI_DEPLOYMENT;
+                if (!AZURE_OPENAI_RESOURCE || !AZURE_OPENAI_API_KEY || !deployment) {
+                    return NextResponse.json({ error: "Azure OpenAI environment is not fully configured" }, { status: 500 });
+                }
+                const baseUrl = `https://${AZURE_OPENAI_RESOURCE}.openai.azure.com/openai/deployments/${deployment}`;
+                const azureClient = new OpenAI({
+                    apiKey: AZURE_OPENAI_API_KEY,
+                    baseURL: baseUrl,
+                    timeout: OPENAI_TIMEOUT,
+                    fetch: longFetch,
+                    defaultQuery: { "api-version": AZURE_OPENAI_API_VERSION || "2025-02-01-preview" },
+                    defaultHeaders: { "api-key": AZURE_OPENAI_API_KEY }
+                });
+                const requestBody = {
+                    model: deployment,
+                    messages: [
+                        {
+                            role: "system",
+                            content: `You are an expert document parser. Extract information from this ${docType}.`
+                        },
+                        {
+                            role: "user",
+                            content: userContent,
+                        },
+                    ],
+                    response_format: {
+                        type: "json_schema",
+                        json_schema: {
+                            name: docType,
+                            strict: true,
+                            schema: strictSchema
+                        }
                     }
-                },
-            });
+                };
+                const mask = (k) => (k ? `${k.slice(0, 6)}...${k.slice(-2)}` : undefined);
+                const urlToCall = `${baseUrl}/chat/completions?api-version=${AZURE_OPENAI_API_VERSION || "2025-02-01-preview"}`;
+                const headersToSend = { "content-type": "application/json", "api-key": mask(AZURE_OPENAI_API_KEY) };
+                console.log("--- Azure OpenAI Request ---");
+                console.log(JSON.stringify({ url: urlToCall, headers: headersToSend, body: requestBody }, null, 2));
+                if (requestBody.response_format) console.log("response_format present: json_schema");
+                console.log("----------------------------");
+                const fetchResp = await longFetch(urlToCall, {
+                    method: "POST",
+                    headers: { "content-type": "application/json", "api-key": AZURE_OPENAI_API_KEY },
+                    body: JSON.stringify(requestBody)
+                });
+                if (!fetchResp.ok) {
+                    const errText = await fetchResp.text().catch(() => "");
+                    throw new Error(`Azure HTTP ${fetchResp.status}: ${errText}`);
+                }
+                response = await fetchResp.json();
+            } else {
+                const requestBody = {
+                    model: "gpt-5",
+                    messages: [
+                        {
+                            role: "system",
+                            content: [{ type: "text", text: `You are an expert document parser. Extract information from this ${docType}.` }]
+                        },
+                        {
+                            role: "user",
+                            content: Array.isArray(userContent) ? userContent : [{ type: "text", text: userContent }],
+                        },
+                    ],
+                    response_format: {
+                        type: "json_schema",
+                        json_schema: {
+                            name: docType,
+                            strict: true,
+                            schema: strictSchema
+                        }
+                    },
+                };
+                const mask = (k) => (k ? `${k.slice(0, 6)}...${k.slice(-2)}` : undefined);
+                const urlToCall = `https://api.openai.com/v1/chat/completions`;
+                const headersToSend = { "content-type": "application/json", "authorization": `Bearer ${mask(process.env.OPENAI_API_KEY)}` };
+                console.log("--- OpenAI Request ---");
+                console.log(JSON.stringify({ url: urlToCall, headers: headersToSend, body: requestBody }, null, 2));
+                if (requestBody.response_format) console.log("response_format present: json_schema");
+                console.log("----------------------");
+                response = await openai.chat.completions.create(requestBody, { timeout: OPENAI_TIMEOUT });
+            }
 
-            const content = response.choices[0].message.content;
+            const content = (response && response.choices && response.choices[0] && response.choices[0].message && response.choices[0].message.content) || "";
 
             // Log Response
             console.log("--- OpenAI Full Response ---");
-            console.log(content);
+            console.log(typeof response === 'string' ? response : JSON.stringify(response, null, 2));
+            console.log("Parsed content:", content);
             console.log("----------------------------");
 
             try {
                 jsonResponse = JSON.parse(content);
             } catch (e) {
                 console.error("Failed to parse OpenAI response:", content);
-                return NextResponse.json({ error: "Failed to parse document from OpenAI", raw: content }, { status: 500 });
+                return NextResponse.json({ error: "Failed to parse document from OpenAI", raw: content || response }, { status: 500 });
             }
 
         } else {

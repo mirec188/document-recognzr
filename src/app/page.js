@@ -7,7 +7,7 @@ export default function Home() {
   const [file, setFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [docType, setDocType] = useState('invoice');
-  const [modelProvider, setModelProvider] = useState('gemini'); // 'gemini' or 'openai'
+  const [modelProvider, setModelProvider] = useState('gemini'); // 'gemini' or 'openai' or 'azure-openai'
   const [isProcessing, setIsProcessing] = useState(false);
   const [result, setResult] = useState(null);
   const [dragActive, setDragActive] = useState(false);
@@ -88,7 +88,7 @@ export default function Home() {
             <div className="glass-panel" style={{ padding: '2rem' }}>
               <h2>1. Select Document Type</h2>
               <div className={styles.typeGrid}>
-                {['invoice', 'bankStatement', 'loanContract'].map((type) => (
+                {['invoice', 'bankStatement', 'loanContract', 'drawdown'].map((type) => (
                   <button
                     key={type}
                     className={`${styles.typeBtn} ${docType === type ? styles.active : ''}`}
@@ -112,6 +112,12 @@ export default function Home() {
                   onClick={() => setModelProvider('openai')}
                 >
                   OpenAI GPT-5
+                </button>
+                <button
+                  className={`${styles.typeBtn} ${modelProvider === 'azure-openai' ? styles.active : ''}`}
+                  onClick={() => setModelProvider('azure-openai')}
+                >
+                  Azure OpenAI (GPT)
                 </button>
               </div>
 
