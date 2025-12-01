@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import { ProxyAgent } from "undici";
 import { enforceStrictSchema } from "./schema.service";
-import { extractTextFromPdf } from "./pdf.service";
+import { pdfToJpegs } from "./pdf.service";
 
 const OPENAI_TIMEOUT = Number(process.env.OPENAI_TIMEOUT_MS) || 300000;
 const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
@@ -24,16 +24,11 @@ export async function analyzeWithOpenAI(file, buffer, docType, schema, provider 
     let userContent;
 
     if (file.type === "application/pdf") {
-        // Extract text from PDF for OpenAI
-        const textContent = await extractTextFromPdf(buffer);
-
-        if (!textContent || textContent.trim().length === 0) {
-            throw new Error("Could not extract text from PDF. If this is a scanned PDF, OpenAI requires OCR which is not currently supported in this mode. Please use Gemini for scanned PDFs.");
-        }
-
-        userContent = `Here is the text content of the ${docType}: 
-
-${textContent} `;
+        const jpegBuffers = await pdfToJpegs(buffer, { density: 200, quality: 80 });
+        userContent = jpegBuffers.map(b => ({
+            type: "image_url",
+            image_url: { url: `data:image/jpeg;base64,${b.toString("base64")}` },
+        }));
     } else {
         // It's an image, use Vision
         const base64Data = buffer.toString("base64");
