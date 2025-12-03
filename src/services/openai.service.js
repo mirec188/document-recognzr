@@ -50,7 +50,7 @@ export async function analyzeWithOpenAI(file, buffer, docType, schema, provider 
     console.log(JSON.stringify(userContent, null, 2));
     console.log("-----------------------------");
 
-    const defaultPrompt = `You are an expert document parser. You are extracting data about list of drawdowns (invoice number, variable symbol, amount and iban (bank account) to where money will be sent). Focus, do not make mistakes.Extract information from this ${docType}.`;
+    const defaultPrompt = `You are an expert document parser. You are extracting data about list of drawdowns (invoice number, variable symbol, amount and iban (bank account) to where money will be sent). Focus, do not make mistakes. This is a scan. IBANS have to be valid. Be careful with errors like 8-6, 5-3 similiar numbers etc. Extract information from this ${docType}.`;
     let systemMessage;
 
     if (customPrompt) {

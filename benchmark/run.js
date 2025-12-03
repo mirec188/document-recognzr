@@ -50,6 +50,10 @@ async function runBenchmark() {
         validations: {
             ok: 0,
             nok: 0
+        },
+        ibans: {
+            valid: 0,
+            invalid: 0
         }
     };
 
@@ -102,6 +106,10 @@ Processing: ${file}`);
                 // Validation
                 const validation = validateDrawdown(result, config.expectedSum);
                 
+                // Accumulate IBAN statistics
+                stats.ibans.valid += validation.validIbans;
+                stats.ibans.invalid += validation.invalidIbans;
+                
                 if (validation.errors.length === 0) {
                     console.log(`OK - ${duration}ms | IBANs: ${validation.validIbans} | Sum: ${validation.totalAmount}`);
                     stats.success++;
@@ -127,6 +135,8 @@ Processing: ${file}`);
     console.log(`Avg Runtime:        ${stats.totalRequests ? Math.round(stats.totalRuntime / stats.totalRequests) : 0}ms`);
     console.log(`Validation OK:      ${stats.validations.ok}`);
     console.log(`Validation NOK:     ${stats.validations.nok}`);
+    console.log(`Valid IBANs:        ${stats.ibans.valid}`);
+    console.log(`Invalid IBANs:      ${stats.ibans.invalid}`);
 }
 
 runBenchmark();

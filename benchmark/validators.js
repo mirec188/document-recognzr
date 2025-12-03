@@ -8,6 +8,9 @@ function validateIBAN(iban) {
     
     // Remove spaces and uppercase
     const normalized = iban.replace(/\s/g, '').toUpperCase();
+    // print iban to stdout
+    console.log(`Validating IBAN: ${normalized}`);
+    
     
     // Basic regex check (Country code + 2 check digits + up to 30 alphanum)
     // Minimal length is 15 (Norway), Max is 34.
@@ -54,8 +57,8 @@ function validateDrawdown(data, expectedTotal = null) {
     // The API might return { drawdown: [...] } or just [...] depending on schema/prompt
     // Our schema defines { drawdown: [ ... ] }
     let items = [];
-    if (data && Array.isArray(data.drawdown)) {
-        items = data.drawdown;
+    if (data && Array.isArray(data.drawdowns)) {
+        items = data.drawdowns;
     } else if (Array.isArray(data)) {
         items = data; // Fallback if model returns direct array
     } else {

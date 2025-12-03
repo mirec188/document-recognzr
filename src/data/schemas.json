@@ -217,15 +217,15 @@
         ]
     },
     "drawdown": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "$id": "https://slsp/schema/drawdown-request.schema.json",
-        "title": "Drawdown Request",
         "type": "object",
         "required": [
-            "drawdown"
+            "drawdowns"
         ],
         "properties": {
-            "drawdown": {
+            "totalSum": {
+                "type": "number"
+            },
+            "drawdowns": {
                 "type": "array",
                 "items": {
                     "type": "object",

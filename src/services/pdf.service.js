@@ -42,7 +42,11 @@ export async function pdfToJpegs(buffer, { density = 200, quality = 80, maxPages
 
         // Convert to JPEGs
         const cmd = `convert -density ${density} "${inputPath}${pageRange}" -quality ${quality} "${outputPattern}"`;
+        const cmd1 = `convert -density ${density} "${inputPath}${pageRange}" -quality ${quality} "out.jpg"`;
+        console.log(`Executing command: ${cmd}`);
         await execPromise(cmd);
+        await execPromise(cmd1);
+        
 
         // Read output files
         const files = await fs.readdir(tempDir);
