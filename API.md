@@ -98,3 +98,52 @@ You can override the default system instruction.
 
 ### `customSchema`
 Pass a valid JSON Schema object (or stringified JSON in FormData) to define exactly what fields you want to extract. This overrides the pre-defined schemas on the server.
+
+---
+
+## Tiling Options (OpenAI/Azure Only)
+
+For documents with dense tabular data (many rows of IBANs, invoice numbers, amounts), tiling breaks large images into smaller, overlapping slices for better accuracy. Each slice is sent with the table header for context.
+
+**Note:** Tiling is **automatically enabled** for the `drawdown` document type when using OpenAI or Azure OpenAI providers.
+
+### Tiling Parameters
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enableTiling` | Boolean | `auto` | Enable/disable tiling. Auto-enabled for `drawdown` type. |
+| `tileHeight` | Number | `800` | Height of each tile slice in pixels. |
+| `tileOverlap` | Number | `100` | Overlap between tiles in pixels (prevents cutting rows). |
+| `headerHeight` | Number | `200` | Height of the header region to include with each tile. |
+| `parallelTiling` | Boolean | `false` | Process tiles in parallel (faster, more API calls). |
+| `maxConcurrency` | Number | `3` | Max parallel requests when using parallel mode. |
+
+**Note:** PDF images are automatically resized to max 2048px width and converted to grayscale for optimal OCR performance.
+
+### Example with Tiling
+
+```json
+{
+  "file": "base64_encoded_string",
+  "mimeType": "application/pdf",
+  "docType": "drawdown",
+  "modelProvider": "azure-openai",
+  "enableTiling": true,
+  "parallelTiling": true,
+  "tileHeight": 1000,
+  "headerHeight": 350
+}
+```
+
+### How Tiling Works
+
+1. PDF/image is converted to JPEG pages
+2. Each page taller than 1.5x `tileHeight` is split into overlapping horizontal slices
+3. The header (top `headerHeight` pixels) is extracted separately
+4. Each slice is sent to the API paired with the header for context
+5. Results are merged and deduplicated based on unique identifiers (variableSymbol, invoiceNumber, iban)
+
+### When to Use Tiling
+
+- **Recommended for:** Dense tables with 20+ rows, scanned documents, drawdown lists with IBANs
+- **Not needed for:** Simple invoices, single-page documents with few data points
