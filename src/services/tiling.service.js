@@ -1,6 +1,46 @@
 import sharp from 'sharp';
 import { saveDebugFiles, getDebugOutputDir } from './pdf.service.js';
 
+/**
+ * Validates an IBAN using MOD-97 algorithm.
+ * @param {string} iban
+ * @returns {boolean}
+ */
+export function validateIBAN(iban) {
+    console.log("Validating IBAN:", iban);
+    if (!iban || typeof iban !== 'string') return false;
+
+    // Remove spaces and uppercase
+    const normalized = iban.replace(/\s/g, '').toUpperCase();
+    console.log("Normalized IBAN:", normalized);
+    // Basic regex check (Country code + 2 check digits + up to 30 alphanum)
+    // Minimal length is 15 (Norway), Max is 34.
+    if (!/^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$/.test(normalized)) return false;
+
+    // Move first 4 chars to end
+    const rearranged = normalized.slice(4) + normalized.slice(0, 4);
+
+    // Replace letters with numbers (A=10, B=11, ..., Z=35)
+    let numeric = '';
+    for (let i = 0; i < rearranged.length; i++) {
+        const code = rearranged.charCodeAt(i);
+        if (code >= 65 && code <= 90) { // A-Z
+            numeric += (code - 55).toString();
+        } else {
+            numeric += rearranged[i];
+        }
+    }
+
+    // Mod 97 check using BigInt
+    try {
+        const remainder = BigInt(numeric) % 97n;
+        console.log("IBAN MOD-97 remainder:", remainder.toString());
+        return remainder === 1n;
+    } catch (e) {
+        return false;
+    }
+}
+
 // Default tiling configuration (optimized for 2048px wide images)
 const DEFAULTS = {
     headerHeight: 200,    // Capture table header area (pixels) - smaller for resized images
@@ -117,8 +157,26 @@ export async function shouldTile(imageBuffer, sliceHeight = DEFAULTS.sliceHeight
 }
 
 /**
+ * Normalizes an IBAN by removing spaces and converting to uppercase.
+ * Also extracts the "core" digits for fuzzy matching (ignoring check digits).
+ * @param {string} iban
+ * @returns {{normalized: string, coreDigits: string}}
+ */
+function normalizeIBAN(iban) {
+    if (!iban || typeof iban !== 'string') {
+        return { normalized: '', coreDigits: '' };
+    }
+    const normalized = iban.replace(/\s/g, '').toUpperCase();
+    // Core digits = everything after country code and check digits (positions 4+)
+    const coreDigits = normalized.slice(4).replace(/[^0-9]/g, '');
+    return { normalized, coreDigits };
+}
+
+/**
  * Deduplicates extracted rows based on unique identifiers.
  * Uses composite key strategy based on document type.
+ * Smart dedup: when same row appears multiple times with different IBAN versions,
+ * prefers the version with a valid IBAN checksum.
  *
  * @param {Array} rows - Array of extracted data rows
  * @param {string} docType - Document type for determining key fields
@@ -131,7 +189,7 @@ export function deduplicateRows(rows, docType) {
 
     // Define key fields per document type
     const keyFieldsMap = {
-        'drawdown': ['variableSymbol', 'invoiceNumber', 'iban'],
+        'drawdown': ['variableSymbol', 'invoiceNumber'],
         'invoice': ['invoiceNumber'],
         'bankStatement': ['date', 'description', 'amount'],
         'loanContract': ['contractNumber']
@@ -144,8 +202,10 @@ export function deduplicateRows(rows, docType) {
         return rows;
     }
 
+    // Map to store best version of each row (keyed by composite key)
     const seen = new Map();
-    const result = [];
+    // Track insertion order
+    const insertionOrder = [];
 
     for (const row of rows) {
         if (!row || typeof row !== 'object') {
@@ -159,20 +219,83 @@ export function deduplicateRows(rows, docType) {
 
         // If no valid key parts, keep the row (can't determine uniqueness)
         if (keyParts.length === 0) {
-            result.push(row);
+            insertionOrder.push({ key: null, row });
             continue;
         }
 
         const key = keyParts.join('|');
 
         if (!seen.has(key)) {
-            seen.set(key, true);
-            result.push(row);
+            // First occurrence
+            seen.set(key, row);
+            insertionOrder.push({ key, row: null }); // Placeholder, will resolve from map
+        } else {
+            // Duplicate detected - smart selection for drawdown type
+            const existing = seen.get(key);
+
+            if (docType === 'drawdown' && row.iban && existing.iban) {
+                const newIban = normalizeIBAN(row.iban);
+                const existingIban = normalizeIBAN(existing.iban);
+
+                // Only compare if IBANs are similar (same core digits pattern, allowing for OCR errors)
+                // Check if they share at least 80% of digits
+                const similarity = calculateSimilarity(newIban.coreDigits, existingIban.coreDigits);
+
+                if (similarity > 0.8) {
+                    const newIsValid = validateIBAN(row.iban);
+                    const existingIsValid = validateIBAN(existing.iban);
+
+                    if (newIsValid && !existingIsValid) {
+                        // Replace with version that has valid IBAN
+                        console.log(`[Dedup] Replacing invalid IBAN ${existing.iban} with valid ${row.iban} (similarity: ${(similarity * 100).toFixed(0)}%)`);
+                        seen.set(key, row);
+                    }
+                }
+                // If IBANs are very different, they might be different rows with same invoice number
+                // Keep the first one in this case
+            }
         }
-        // Duplicate detected - skip (first occurrence wins)
+    }
+
+    // Build result preserving insertion order
+    const result = [];
+    for (const entry of insertionOrder) {
+        if (entry.key === null) {
+            // Row without key - add directly
+            result.push(entry.row);
+        } else {
+            // Get the best version from the map
+            const bestRow = seen.get(entry.key);
+            if (bestRow && !result.includes(bestRow)) {
+                result.push(bestRow);
+            }
+        }
     }
 
     return result;
+}
+
+/**
+ * Calculates similarity between two strings (0-1).
+ * Uses simple character matching - good enough for digit comparison.
+ */
+function calculateSimilarity(str1, str2) {
+    if (!str1 || !str2) return 0;
+    if (str1 === str2) return 1;
+
+    const longer = str1.length > str2.length ? str1 : str2;
+    const shorter = str1.length > str2.length ? str2 : str1;
+
+    if (longer.length === 0) return 1;
+
+    // Count matching characters at same positions
+    let matches = 0;
+    const minLen = Math.min(str1.length, str2.length);
+    for (let i = 0; i < minLen; i++) {
+        if (str1[i] === str2[i]) matches++;
+    }
+
+    return matches / longer.length;
 }
 
 /**

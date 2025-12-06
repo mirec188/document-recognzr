@@ -121,7 +121,7 @@ Processing: ${file}`);
                     requestBody.enableTiling = config.enableTiling;
                 }
                 if (config.parallelTiling) {
-                    requestBody.parallelTiling = true;
+                    requestBody.parallelTiling = false;
                 }
                 if (config.tileHeight) {
                     requestBody.tileHeight = config.tileHeight;
