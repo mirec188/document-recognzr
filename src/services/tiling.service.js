@@ -1,21 +1,41 @@
 import sharp from 'sharp';
 import { saveDebugFiles, getDebugOutputDir } from './pdf.service.js';
 
+// Country-specific IBAN lengths (ISO 13616)
+const IBAN_LENGTHS = {
+    'SK': 24, // Slovakia
+    'CZ': 24, // Czech Republic
+    'AT': 20, // Austria
+    'DE': 22, // Germany
+    'HU': 28, // Hungary
+    'PL': 28, // Poland
+    'SI': 19, // Slovenia
+    'HR': 21, // Croatia
+    'RO': 24, // Romania
+    'BG': 22, // Bulgaria
+    'UA': 29, // Ukraine
+};
+
 /**
- * Validates an IBAN using MOD-97 algorithm.
+ * Validates an IBAN using MOD-97 algorithm with country-specific length checks.
  * @param {string} iban
  * @returns {boolean}
  */
 export function validateIBAN(iban) {
-    console.log("Validating IBAN:", iban);
     if (!iban || typeof iban !== 'string') return false;
 
     // Remove spaces and uppercase
     const normalized = iban.replace(/\s/g, '').toUpperCase();
-    console.log("Normalized IBAN:", normalized);
+
     // Basic regex check (Country code + 2 check digits + up to 30 alphanum)
-    // Minimal length is 15 (Norway), Max is 34.
     if (!/^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$/.test(normalized)) return false;
+
+    // Country-specific length validation
+    const countryCode = normalized.slice(0, 2);
+    const expectedLength = IBAN_LENGTHS[countryCode];
+    if (expectedLength && normalized.length !== expectedLength) {
+        return false;
+    }
 
     // Move first 4 chars to end
     const rearranged = normalized.slice(4) + normalized.slice(0, 4);
@@ -34,11 +54,87 @@ export function validateIBAN(iban) {
     // Mod 97 check using BigInt
     try {
         const remainder = BigInt(numeric) % 97n;
-        console.log("IBAN MOD-97 remainder:", remainder.toString());
         return remainder === 1n;
     } catch (e) {
         return false;
     }
+}
+
+/**
+ * Validates an IBAN and returns detailed validation info.
+ * @param {string} iban
+ * @returns {{valid: boolean, normalized: string, issue: string|null, countryCode: string|null, expectedLength: number|null, actualLength: number}}
+ */
+export function validateIBANDetailed(iban) {
+    const result = {
+        valid: false,
+        normalized: '',
+        issue: null,
+        countryCode: null,
+        expectedLength: null,
+        actualLength: 0
+    };
+
+    if (!iban || typeof iban !== 'string') {
+        result.issue = 'missing';
+        return result;
+    }
+
+    // Remove spaces and uppercase
+    const normalized = iban.replace(/\s/g, '').toUpperCase();
+    result.normalized = normalized;
+    result.actualLength = normalized.length;
+
+    // Basic format check
+    if (!/^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$/.test(normalized)) {
+        result.issue = 'invalid_format';
+        return result;
+    }
+
+    // Country-specific length validation
+    const countryCode = normalized.slice(0, 2);
+    result.countryCode = countryCode;
+    const expectedLength = IBAN_LENGTHS[countryCode];
+    result.expectedLength = expectedLength || null;
+
+    if (expectedLength) {
+        if (normalized.length < expectedLength) {
+            result.issue = 'too_short';
+            return result;
+        } else if (normalized.length > expectedLength) {
+            result.issue = 'too_long';
+            return result;
+        }
+    }
+
+    // Move first 4 chars to end
+    const rearranged = normalized.slice(4) + normalized.slice(0, 4);
+
+    // Replace letters with numbers (A=10, B=11, ..., Z=35)
+    let numeric = '';
+    for (let i = 0; i < rearranged.length; i++) {
+        const code = rearranged.charCodeAt(i);
+        if (code >= 65 && code <= 90) { // A-Z
+            numeric += (code - 55).toString();
+        } else {
+            numeric += rearranged[i];
+        }
+    }
+
+    // Mod 97 check using BigInt
+    try {
+        const remainder = BigInt(numeric) % 97n;
+        if (remainder !== 1n) {
+            result.issue = 'checksum_failed';
+            return result;
+        }
+    } catch (e) {
+        result.issue = 'checksum_error';
+        return result;
+    }
+
+    result.valid = true;
+    return result;
 }
 
 // Default tiling configuration (optimized for 2048px wide images)
