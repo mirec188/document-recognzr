@@ -651,7 +651,7 @@ export async function analyzeWithOpenAI(file, buffer, docType, schema, provider 
     // Convert PDF to JPEGs if needed, or use image directly
     let jpegBuffers;
     if (file.type === "application/pdf") {
-        jpegBuffers = await pdfToJpegs(buffer, { density: 100, quality: 60 });
+        jpegBuffers = await pdfToJpegs(buffer, { density: 150, quality: 80   });
         console.log(`[${apiType}] PDF converted to ${jpegBuffers.length} page(s)`);
     } else {
         jpegBuffers = [buffer];

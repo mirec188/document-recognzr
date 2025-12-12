@@ -45,8 +45,8 @@ export async function extractTextFromPdf(buffer) {
  * @returns {Promise<Buffer[]>} Array of JPEG buffers
  */
 export async function pdfToJpegs(buffer, {
-    density = 100,
-    quality = 60,
+    density = 200,
+    quality = 80,
     maxPages = 10,
     maxWidth = MAX_IMAGE_WIDTH,
     grayscale = true,
