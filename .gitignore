@@ -30,6 +30,9 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
+# API call logs
+/logs
+
 # env files (can opt-in for committing if needed)
 .env*
 
@@ -40,6 +43,7 @@ yarn-error.log*
 *.jpeg
 *.jpg
 *.png
+*.csv
 /benchmark/data
 # typescript
 *.tsbuildinfo
