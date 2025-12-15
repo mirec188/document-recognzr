@@ -1,10 +1,106 @@
 const fs = require('fs');
 const path = require('path');
 const { validateDrawdown } = require('./validators');
+const {
+    findReferenceCSV,
+    loadReferenceCSV,
+    compareWithReference,
+    formatComparisonLog
+} = require('./reference-validator');
 
 // Configuration
-const API_URL = process.env.API_URL || 'http://localhost:3000/api/recognize';
 const DEFAULT_TIMEOUT = 800000; // 5 minutes - needed for parallel tiling with many tiles
+
+// Logging configuration
+const LOG_DIR = path.join(process.cwd(), 'logs');
+const LOG_FILE = path.join(LOG_DIR, 'api-calls.log');
+const OUTPUT_DIR = path.join(LOG_DIR, 'outputs');
+
+// Session timestamp for output files
+let sessionTimestamp = null;
+
+/**
+ * Initialize log file and output directory for this benchmark session.
+ */
+function initializeLog(config, apiUrl) {
+    // Ensure log directory exists
+    if (!fs.existsSync(LOG_DIR)) {
+        fs.mkdirSync(LOG_DIR, { recursive: true });
+    }
+
+    // Create session-specific output directory
+    sessionTimestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const sessionOutputDir = path.join(OUTPUT_DIR, sessionTimestamp);
+    if (!fs.existsSync(sessionOutputDir)) {
+        fs.mkdirSync(sessionOutputDir, { recursive: true });
+    }
+
+    const header = `
+${'#'.repeat(80)}
+${'#'.repeat(80)}
+##  BENCHMARK SESSION: ${sessionTimestamp}
+${'#'.repeat(80)}
+${'#'.repeat(80)}
+
+CONFIGURATION:
+${JSON.stringify({ ...config, apiUrl }, null, 2)}
+
+`;
+
+    // Clear and write new session header
+    fs.writeFileSync(LOG_FILE, header, 'utf8');
+    console.log(`Log file: ${LOG_FILE}`);
+    console.log(`Output dir: ${sessionOutputDir}`);
+}
+
+/**
+ * Save result JSON to output directory.
+ */
+function saveResultJson(filename, runIndex, result, validation, referenceComparison = null) {
+    if (!sessionTimestamp) return;
+
+    const sessionOutputDir = path.join(OUTPUT_DIR, sessionTimestamp);
+    const baseName = path.basename(filename, path.extname(filename));
+    const outputFile = path.join(sessionOutputDir, `${baseName}_run${runIndex + 1}.json`);
+
+    const output = {
+        source: filename,
+        run: runIndex + 1,
+        timestamp: new Date().toISOString(),
+        validation: {
+            validIbans: validation.validIbans,
+            invalidIbans: validation.invalidIbans,
+            totalAmount: validation.totalAmount,
+            errors: validation.errors
+        },
+        result: result
+    };
+
+    // Add reference comparison if available
+    if (referenceComparison) {
+        output.referenceComparison = {
+            refFile: referenceComparison.refFile,
+            totalRef: referenceComparison.totalRef,
+            totalApi: referenceComparison.totalApi,
+            matched: referenceComparison.matched,
+            matchedWithCorrectIban: referenceComparison.matchedWithCorrectIban,
+            matchedWithCorrectAmount: referenceComparison.matchedWithCorrectAmount,
+            perfectMatches: referenceComparison.matchedAllFields,
+            ibanAccuracy: referenceComparison.matched > 0
+                ? `${((referenceComparison.matchedWithCorrectIban / referenceComparison.matched) * 100).toFixed(1)}%`
+                : '0%',
+            amountAccuracy: referenceComparison.matched > 0
+                ? `${((referenceComparison.matchedWithCorrectAmount / referenceComparison.matched) * 100).toFixed(1)}%`
+                : '0%',
+            missing: referenceComparison.missing,
+            extra: referenceComparison.extra,
+            fieldErrors: referenceComparison.fieldErrors
+        };
+    }
+
+    fs.writeFileSync(outputFile, JSON.stringify(output, null, 2), 'utf8');
+    return outputFile;
+}
 
 async function runBenchmark() {
     const args = process.argv.slice(2);
@@ -19,7 +115,12 @@ async function runBenchmark() {
         tileHeight: null,
         tileOverlap: null,
         headerHeight: null,
-        maxConcurrency: null
+        maxConcurrency: null,
+        // Pipeline mode (v2 API)
+        pipelineMode: null,      // null = use v1 API, otherwise: "default", "ocr-enhanced", "ocr-only"
+        apiVersion: 'v1',        // v1 = /api/recognize, v2 = /api/recognize-v2
+        // Reference validation
+        useReference: false      // --reference flag
     };
 
     // Simple argument parsing
@@ -36,16 +137,32 @@ async function runBenchmark() {
         else if (args[i] === '--tile-overlap') config.tileOverlap = parseInt(args[++i]);
         else if (args[i] === '--header-height') config.headerHeight = parseInt(args[++i]);
         else if (args[i] === '--max-concurrency') config.maxConcurrency = parseInt(args[++i]);
+        // Pipeline mode (v2 API)
+        else if (args[i] === '--pipeline-mode') {
+            config.pipelineMode = args[++i];
+            config.apiVersion = 'v2';  // Auto-switch to v2 API
+        }
+        else if (args[i] === '--api-version') config.apiVersion = args[++i];
+        // Reference validation
+        else if (args[i] === '--reference') config.useReference = true;
         else if (args[i] === '--help' || args[i] === '-h') {
             printHelp();
             process.exit(0);
         }
     }
 
+    // Determine API URL based on version
+    const API_URL = config.apiVersion === 'v2'
+        ? 'http://localhost:3000/api/recognize-v2'
+        : 'http://localhost:3000/api/recognize';
+
     console.log('--- Benchmark Configuration ---');
     console.log(`Directory:       ${config.dir}`);
     console.log(`Runs per file:   ${config.runs}`);
     console.log(`Provider:        ${config.provider}`);
+    console.log(`API Version:     ${config.apiVersion}`);
+    console.log(`API URL:         ${API_URL}`);
+    if (config.pipelineMode) console.log(`Pipeline Mode:   ${config.pipelineMode}`);
     console.log(`Expected sum:    ${config.expectedSum || 'not set'}`);
     console.log(`Tiling:          ${config.enableTiling === null ? 'auto' : config.enableTiling ? 'enabled' : 'disabled'}`);
     console.log(`Parallel tiling: ${config.parallelTiling}`);
@@ -53,7 +170,11 @@ async function runBenchmark() {
     if (config.tileOverlap) console.log(`Tile overlap:    ${config.tileOverlap}px`);
     if (config.headerHeight) console.log(`Header height:   ${config.headerHeight}px`);
     if (config.maxConcurrency) console.log(`Max concurrency: ${config.maxConcurrency}`);
+    console.log(`Reference:       ${config.useReference ? 'enabled' : 'disabled'}`);
     console.log('-------------------------------');
+
+    // Initialize log file for this session
+    initializeLog(config, API_URL);
 
     if (!fs.existsSync(config.dir)) {
         console.error(`Directory not found: ${config.dir}`);
@@ -84,7 +205,17 @@ async function runBenchmark() {
             valid: 0,
             invalid: 0
         },
-        tilesProcessed: 0
+        tilesProcessed: 0,
+        // Reference validation stats
+        reference: {
+            filesWithRef: 0,
+            totalRefRows: 0,
+            totalApiRows: 0,
+            matched: 0,
+            matchedWithCorrectIban: 0,
+            matchedWithCorrectAmount: 0,
+            perfectMatches: 0
+        }
     };
 
     console.log(`Found ${files.length} files. Starting benchmark...`);
@@ -135,6 +266,10 @@ Processing: ${file}`);
                 if (config.maxConcurrency) {
                     requestBody.maxConcurrency = config.maxConcurrency;
                 }
+                // Pipeline mode (v2 API)
+                if (config.pipelineMode) {
+                    requestBody.pipelineMode = config.pipelineMode;
+                }
 
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT);
@@ -169,6 +304,45 @@ Processing: ${file}`);
                 stats.ibans.valid += validation.validIbans;
                 stats.ibans.invalid += validation.invalidIbans;
 
+                // Reference validation (if enabled)
+                let refComparison = null;
+                if (config.useReference) {
+                    const refPath = findReferenceCSV(filePath);
+                    if (refPath) {
+                        const refItems = loadReferenceCSV(refPath);
+                        const apiItems = result.drawdowns || result.items || [];
+                        const comparison = compareWithReference(apiItems, refItems);
+
+                        // Add reference file info
+                        refComparison = {
+                            ...comparison,
+                            refFile: path.basename(refPath)
+                        };
+
+                        // Accumulate reference stats
+                        stats.reference.filesWithRef++;
+                        stats.reference.totalRefRows += comparison.totalRef;
+                        stats.reference.totalApiRows += comparison.totalApi;
+                        stats.reference.matched += comparison.matched;
+                        stats.reference.matchedWithCorrectIban += comparison.matchedWithCorrectIban;
+                        stats.reference.matchedWithCorrectAmount += comparison.matchedWithCorrectAmount;
+                        stats.reference.perfectMatches += comparison.matchedAllFields;
+
+                        // Log comparison to file
+                        const logEntry = formatComparisonLog(file, refPath, comparison);
+                        fs.appendFileSync(LOG_FILE, logEntry, 'utf8');
+
+                        // Console output for reference comparison
+                        const ibanPct = comparison.matched > 0
+                            ? ((comparison.matchedWithCorrectIban / comparison.matched) * 100).toFixed(1)
+                            : '0.0';
+                        console.log(`    Reference: ${comparison.matched}/${comparison.totalRef} matched, IBAN accuracy: ${ibanPct}%`);
+                    }
+                }
+
+                // Save result JSON
+                const outputFile = saveResultJson(file, i, result, validation, refComparison);
+
                 if (validation.errors.length === 0) {
                     console.log(`OK - ${duration}ms | IBANs: ${validation.validIbans} | Sum: ${validation.totalAmount}`);
                     stats.success++;
@@ -179,6 +353,7 @@ Processing: ${file}`);
                     stats.success++; // Request succeeded, but validation failed
                     stats.validations.nok++;
                 }
+                console.log(`    Output: ${outputFile}`);
 
             } catch (err) {
                  console.log(`ERROR: ${err.message}`);
@@ -197,6 +372,32 @@ Processing: ${file}`);
     console.log(`Valid IBANs:        ${stats.ibans.valid}`);
     console.log(`Invalid IBANs:      ${stats.ibans.invalid}`);
     console.log(`IBAN Accuracy:      ${stats.ibans.valid + stats.ibans.invalid > 0 ? Math.round(stats.ibans.valid / (stats.ibans.valid + stats.ibans.invalid) * 100) : 0}%`);
+
+    // Reference validation summary
+    if (config.useReference && stats.reference.filesWithRef > 0) {
+        const ref = stats.reference;
+        const matchPct = ref.totalRefRows > 0
+            ? ((ref.matched / ref.totalRefRows) * 100).toFixed(1)
+            : '0.0';
+        const ibanPct = ref.matched > 0
+            ? ((ref.matchedWithCorrectIban / ref.matched) * 100).toFixed(1)
+            : '0.0';
+        const amountPct = ref.matched > 0
+            ? ((ref.matchedWithCorrectAmount / ref.matched) * 100).toFixed(1)
+            : '0.0';
+        const perfectPct = ref.matched > 0
+            ? ((ref.perfectMatches / ref.matched) * 100).toFixed(1)
+            : '0.0';
+
+        console.log('\n--- Reference Validation ---');
+        console.log(`Files with ref:     ${ref.filesWithRef}`);
+        console.log(`Reference rows:     ${ref.totalRefRows}`);
+        console.log(`API rows:           ${ref.totalApiRows}`);
+        console.log(`Matched rows:       ${ref.matched}/${ref.totalRefRows} (${matchPct}%)`);
+        console.log(`IBAN accuracy:      ${ref.matchedWithCorrectIban}/${ref.matched} (${ibanPct}%)`);
+        console.log(`Amount accuracy:    ${ref.matchedWithCorrectAmount}/${ref.matched} (${amountPct}%)`);
+        console.log(`Perfect matches:    ${ref.perfectMatches}/${ref.matched} (${perfectPct}%)`);
+    }
 }
 
 function printHelp() {
@@ -220,6 +421,18 @@ Tiling Options:
   --header-height <px>   Height of header region (default: 300)
   --max-concurrency <n>  Max parallel requests (default: 3)
 
+Pipeline Options (v2 API):
+  --pipeline-mode <mode> Pipeline mode (auto-enables v2 API):
+                         - default: Standard tiling + AI vision
+                         - ocr-enhanced: Azure OCR + images sent to AI (best accuracy)
+                         - ocr-only: Azure OCR text only, no images (fastest, cheapest)
+                         - ocr-verified: OCR + image + IBAN verification loop (best for IBANs)
+  --api-version <v1|v2>  API version to use (default: v1, auto-set to v2 with --pipeline-mode)
+
+Reference Validation:
+  --reference            Enable validation against *_reference.csv files
+                         (e.g., ziadost1.pdf validates against ziadost1_reference.csv)
+
 Examples:
   # Basic benchmark with OpenAI
   node benchmark/run.js --provider openai
@@ -232,6 +445,18 @@ Examples:
 
   # Validate expected sum
   node benchmark/run.js --provider openai --expected-sum 12500.50
+
+  # Pipeline mode: OCR-enhanced (best accuracy)
+  node benchmark/run.js --provider openai --pipeline-mode ocr-enhanced
+
+  # Pipeline mode: OCR-only (fastest, cheapest)
+  node benchmark/run.js --provider openai --pipeline-mode ocr-only
+
+  # Pipeline mode: OCR-verified (best for IBANs, includes verification loop)
+  node benchmark/run.js --provider openai --pipeline-mode ocr-verified
+
+  # Benchmark with reference validation
+  node benchmark/run.js --provider openai --pipeline-mode ocr-verified --reference
 `);
 }
 

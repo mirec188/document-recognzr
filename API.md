@@ -147,3 +147,151 @@ For documents with dense tabular data (many rows of IBANs, invoice numbers, amou
 
 - **Recommended for:** Dense tables with 20+ rows, scanned documents, drawdown lists with IBANs
 - **Not needed for:** Simple invoices, single-page documents with few data points
+
+---
+
+## Pipeline Modes (v2 API)
+
+**Endpoint:** `POST /api/recognize-v2`
+
+The v2 API supports three pipeline modes for different accuracy/cost trade-offs:
+
+### Pipeline Mode Parameter
+
+| Mode | Description | Speed | Cost | Accuracy |
+|------|-------------|-------|------|----------|
+| `default` | Standard tiling + AI vision | Medium | High | Good |
+| `ocr-enhanced` | Azure OCR text + images to AI | Slow | Highest | Best |
+| `ocr-only` | Azure OCR text only (no images) | Fast | Low | Good* |
+| `ocr-verified` | OCR + image + IBAN verification loop | Slowest | Highest | Best for IBANs |
+
+*OCR-only works well when document structure is simple and OCR quality is high.
+
+### Mode 1: Default (Tiling + Vision)
+
+Standard mode using image tiling and AI vision.
+
+```json
+{
+  "file": "base64...",
+  "mimeType": "application/pdf",
+  "docType": "drawdown",
+  "modelProvider": "openai",
+  "pipelineMode": "default"
+}
+```
+
+### Mode 2: OCR-Enhanced (Best Accuracy)
+
+Azure OCR extracts text first, then sends **both OCR text AND images** to OpenAI.
+The AI can cross-reference the accurate OCR text with the visual layout.
+
+```json
+{
+  "file": "base64...",
+  "mimeType": "application/pdf",
+  "docType": "drawdown",
+  "modelProvider": "openai",
+  "pipelineMode": "ocr-enhanced"
+}
+```
+
+**Benefits:**
+- OCR provides accurate character recognition (97%+ accuracy)
+- AI uses images to understand layout and match values
+- Best for documents where character accuracy is critical (IBANs, invoice numbers)
+
+### Mode 3: OCR-Only (Fastest & Cheapest)
+
+Azure OCR extracts text, then sends **only the text** to OpenAI (no images).
+
+```json
+{
+  "file": "base64...",
+  "mimeType": "application/pdf",
+  "docType": "drawdown",
+  "modelProvider": "openai",
+  "pipelineMode": "ocr-only"
+}
+```
+
+**Benefits:**
+- Much faster (no image processing by AI)
+- Much cheaper (text tokens vs image tokens)
+- Works well for simple, well-structured documents
+
+**Limitations:**
+- AI doesn't see document layout
+- May struggle to match values that belong together in complex tables
+
+### Mode 4: OCR-Verified (Best for IBANs)
+
+Multi-step pipeline with IBAN verification and correction loop:
+
+1. Azure OCR extracts text
+2. AI parses OCR text + image into structured JSON
+3. All IBANs are validated using MOD-97 checksum
+4. If invalid IBANs found, AI re-examines them with context about valid IBANs
+
+```json
+{
+  "file": "base64...",
+  "mimeType": "application/pdf",
+  "docType": "drawdown",
+  "modelProvider": "openai",
+  "pipelineMode": "ocr-verified"
+}
+```
+
+**Benefits:**
+- Highest accuracy for IBAN extraction
+- Automatic correction of OCR/parsing errors
+- Deduplication of similar IBANs (removes duplicates where one is valid)
+- AI gets context about what's already valid to make better corrections
+
+**How the Verification Loop Works:**
+1. Initial extraction produces a list of items with IBANs
+2. Each IBAN is validated using the MOD-97 checksum algorithm
+3. Items are split into valid and invalid groups
+4. For invalid IBANs, AI is prompted with:
+   - The original image for visual reference
+   - List of valid IBANs (for duplicate detection)
+   - List of invalid IBANs to re-examine
+5. AI attempts to correct IBANs or identify duplicates
+6. Only successfully corrected IBANs (passing checksum) are added to final result
+
+**When to Use:**
+- Documents with many IBANs where accuracy is critical
+- Scanned documents with potential OCR errors
+- When you need guaranteed valid IBANs in the output
+
+---
+
+## Azure Computer Vision OCR Configuration
+
+### Required Environment Variables
+
+```bash
+AZURE_VISION_ENDPOINT=https://your-resource.cognitiveservices.azure.com
+AZURE_VISION_KEY=your-api-key
+```
+
+### OCR Parameters
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `pipelineMode` | String | `default` | Pipeline mode: `default`, `ocr-enhanced`, `ocr-only` |
+| `useAzureOCR` | Boolean | `false` | Enable OCR in default mode (auto-enabled for other modes) |
+| `ocrLanguage` | String | `sk` | Language hint for OCR (e.g., `en`, `sk`, `de`). |
+| `ocrConcurrency` | Number | `3` | Max parallel OCR requests. |
+
+### When to Use Each Mode
+
+| Scenario | Recommended Mode |
+|----------|------------------|
+| High-quality digital PDFs | `default` |
+| Scanned documents with tables | `ocr-enhanced` |
+| Simple invoices, good quality | `ocr-only` |
+| Documents with many IBANs/numbers | `ocr-enhanced` |
+| Cost-sensitive batch processing | `ocr-only` |
+| Complex multi-column layouts | `ocr-enhanced` |
